@@ -1,0 +1,755 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ProxyWatcher</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:       #0d1117;
+  --bg2:      #161b22;
+  --bg3:      #21262d;
+  --border:   #30363d;
+  --text:     #e6edf3;
+  --text2:    #aeb6c0;
+  --text3:    #7d8590;
+  --accent:   #6cb1ff;
+  --green:    #4ac35e;
+  --yellow:   #e0a83a;
+  --red:      #ff6a60;
+  --purple:   #c9a2ff;
+  --panel:    560px;
+}
+
+body { font-family: ui-monospace, "Cascadia Code", monospace; background: var(--bg); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; font-size: 14px; line-height: 1.5; }
+
+/* ── Header ── */
+header { display: flex; align-items: center; gap: 12px; padding: 13px 24px; border-bottom: 1px solid var(--border); background: var(--bg2); flex-shrink: 0; }
+header h1 { font-size: 17px; font-weight: 600; color: #f0f6fc; letter-spacing: 0.05em; }
+.header-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+#status { font-size: 13px; display: flex; align-items: center; gap: 6px; color: var(--text2); }
+#status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+#status-dot.disconnected { background: var(--red); }
+.btn { font-family: inherit; font-size: 13px; padding: 7px 14px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg3); color: var(--text); cursor: pointer; }
+.btn:hover { background: var(--border); }
+.btn.primary { background: var(--accent); color: #0d1117; border-color: var(--accent); font-weight: 600; }
+.btn.danger { border-color: var(--red); color: var(--red); }
+
+/* ── Stats bar ── */
+.stats { display: flex; gap: 1px; background: var(--border); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.stat { background: var(--bg2); padding: 13px 24px; flex: 1; cursor: pointer; transition: background 0.1s; }
+.stat:hover { background: var(--bg3); }
+.stat.active { border-bottom: 2px solid var(--accent); }
+.stat-label { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 4px; }
+.stat-value { font-size: 27px; font-weight: 600; }
+.stat-value.c-critical { color: var(--red); }
+.stat-value.c-high     { color: var(--yellow); }
+.stat-value.c-medium   { color: var(--accent); }
+.stat-value.c-green    { color: var(--green); }
+.stat-value.c-purple   { color: var(--purple); }
+
+/* ── Toolbar ── */
+.toolbar { display: flex; align-items: center; gap: 10px; padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--bg2); flex-shrink: 0; flex-wrap: wrap; }
+.toolbar input[type=text] { font-family: inherit; font-size: 13px; padding: 7px 12px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); width: 230px; }
+.toolbar input[type=text]:focus { outline: none; border-color: var(--accent); }
+.toolbar select { font-family: inherit; font-size: 13px; padding: 7px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); cursor: pointer; }
+.toolbar select:focus { outline: none; border-color: var(--accent); }
+.sep { width: 1px; height: 22px; background: var(--border); }
+#bulk-actions { display: none; align-items: center; gap: 10px; }
+#bulk-actions.visible { display: flex; }
+#selected-count { font-size: 13px; color: var(--text2); }
+
+/* ── Main layout ── */
+.main { display: flex; flex: 1; overflow: hidden; }
+
+/* ── Table ── */
+.table-wrap { flex: 1; overflow-y: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+thead th { position: sticky; top: 0; z-index: 10; text-align: left; padding: 11px 14px; font-size: 11px; font-weight: 500; color: var(--text2); border-bottom: 1px solid var(--border); background: var(--bg2); text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap; }
+thead th:first-child { width: 36px; }
+tbody tr { border-bottom: 1px solid var(--bg2); cursor: pointer; transition: background 0.1s; }
+tbody tr:hover { background: var(--bg2); }
+tbody tr.selected { background: #1c2333; }
+tbody tr.active-detail { background: #1c2333; border-left: 2px solid var(--accent); }
+tbody tr.new { animation: flash 0.8s ease; }
+@keyframes flash { 0% { background: #1a2e1a; } 100% { background: transparent; } }
+td { padding: 12px 14px; vertical-align: middle; }
+
+/* Severity badge */
+.sev { display: inline-block; padding: 3px 9px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+.sev.critical { background: #2d1515; color: var(--red); border: 1px solid #5c2020; }
+.sev.high     { background: #2d2008; color: var(--yellow); border: 1px solid #5c4010; }
+.sev.medium   { background: #0d1f3c; color: var(--accent); border: 1px solid #1a3a6c; }
+.sev.low      { background: #0f2010; color: var(--green); border: 1px solid #1a4020; }
+.sev.unknown  { background: var(--bg3); color: var(--text2); border: 1px solid var(--border); }
+
+/* Status badge */
+.status-badge { display: inline-block; padding: 3px 9px; border-radius: 10px; font-size: 11px; font-weight: 500; }
+.status-badge.unassigned  { background: var(--bg3); color: var(--text2); }
+.status-badge.open        { background: #0d1f3c; color: var(--accent); }
+.status-badge.investigating { background: #2d2008; color: var(--yellow); }
+.status-badge.closed      { background: #0f2010; color: var(--green); }
+
+.host-cell { color: #f0f6fc; font-weight: 500; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.url-cell  { color: var(--text2); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flags-cell { display: flex; flex-wrap: wrap; gap: 4px; max-width: 220px; }
+.flag { background: var(--bg3); color: var(--text2); font-size: 11px; padding: 2px 6px; border-radius: 3px; border: 1px solid var(--border); white-space: nowrap; }
+.summary-cell { color: var(--text2); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.action-cell { font-size: 12px; }
+.action-cell.block       { color: var(--red); }
+.action-cell.investigate { color: var(--yellow); }
+.action-cell.monitor     { color: var(--green); }
+.time-cell { color: var(--text3); white-space: nowrap; font-size: 12px; }
+.assigned-cell { color: var(--text2); font-size: 12px; }
+
+input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+
+#empty-state { text-align: center; padding: 80px 0; color: var(--text3); font-size: 14px; }
+
+/* ── Detail panel ── */
+.detail-panel { width: var(--panel); max-width: 70vw; border-left: 1px solid var(--border); background: var(--bg2); display: none; flex-direction: column; overflow: hidden; flex-shrink: 0; box-shadow: -8px 0 24px rgba(0,0,0,0.35); }
+.detail-panel.open { display: flex; }
+.detail-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 24px; border-bottom: 1px solid var(--border); background: var(--bg3); flex-shrink: 0; }
+.detail-header h2 { font-size: 16px; font-weight: 600; color: #f0f6fc; }
+.close-btn { background: none; border: none; color: var(--text2); cursor: pointer; font-size: 24px; line-height: 1; padding: 0 6px; }
+.close-btn:hover { color: var(--text); }
+.detail-body { flex: 1; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 22px; }
+
+/* Card-style sections so the dense content reads as distinct blocks */
+.detail-section { display: flex; flex-direction: column; gap: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; }
+.detail-section h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--accent); padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+
+/* Two-column grid for short fields — fixes the cramped single-column stack */
+.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 20px; }
+.detail-grid .detail-field.full { grid-column: 1 / -1; }
+
+.detail-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.detail-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text3); }
+.detail-value { font-size: 14px; color: var(--text); word-break: break-word; line-height: 1.55; }
+.detail-value.summary { color: var(--text); line-height: 1.65; font-size: 14px; }
+.detail-value.mono { font-family: inherit; word-break: break-all; }
+
+/* Case management controls */
+.case-controls { display: flex; flex-direction: column; gap: 12px; }
+.case-controls select, .case-controls input { font-family: inherit; font-size: 14px; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg2); color: var(--text); width: 100%; }
+.case-controls select:focus, .case-controls input:focus { outline: none; border-color: var(--accent); }
+.case-controls .btn { padding: 9px 14px; font-size: 14px; }
+.case-row { display: flex; gap: 10px; }
+.case-row select { flex: 1; }
+
+/* Notes */
+.notes-list { display: flex; flex-direction: column; gap: 10px; }
+.note { background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 11px 14px; }
+.note-meta { font-size: 11px; color: var(--text3); margin-bottom: 5px; }
+.note-body { font-size: 14px; color: var(--text); line-height: 1.55; }
+.note-input { font-family: inherit; font-size: 14px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg2); color: var(--text); width: 100%; resize: vertical; min-height: 72px; }
+.note-input:focus { outline: none; border-color: var(--accent); }
+
+/* Raw / flags detail */
+.raw-block { font-size: 13px; color: var(--text2); background: var(--bg2); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; max-height: 260px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; line-height: 1.6; }
+
+/* Closing reason */
+.closing-section { display: none; flex-direction: column; gap: 8px; }
+.closing-section.visible { display: flex; }
+
+/* ── Correlations panel (shares the drawer slot styling) ── */
+.corr-list { display: flex; flex-direction: column; gap: 14px; }
+.corr-card { background: var(--bg); border: 1px solid var(--border); border-left: 3px solid var(--border); border-radius: 10px; padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
+.corr-card.critical { border-left-color: var(--red); }
+.corr-card.high     { border-left-color: var(--yellow); }
+.corr-card.medium   { border-left-color: var(--accent); }
+.corr-card.low      { border-left-color: var(--green); }
+.corr-card.acknowledged, .corr-card.closed { opacity: 0.55; }
+.corr-card-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.corr-rule { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--purple); background: var(--bg3); border: 1px solid var(--border); padding: 2px 8px; border-radius: 4px; }
+.corr-title { font-size: 15px; font-weight: 600; color: #f0f6fc; }
+.corr-desc { font-size: 14px; color: var(--text2); line-height: 1.55; }
+.corr-meta { font-size: 12px; color: var(--text3); display: flex; gap: 14px; flex-wrap: wrap; }
+.corr-alert-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.corr-chip { font-size: 12px; color: var(--accent); background: var(--bg3); border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; cursor: pointer; }
+.corr-chip:hover { border-color: var(--accent); }
+.corr-actions { display: flex; gap: 8px; margin-top: 2px; }
+.corr-empty { color: var(--text3); font-size: 14px; text-align: center; padding: 40px 0; }
+#corr-count-badge { display: inline-block; min-width: 18px; text-align: center; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>⬡ PROXYWATCHER</h1>
+  <div class="header-actions">
+    <button class="btn" onclick="openCorrelations()">⚇ Correlations (<span id="corr-count-badge">0</span>)</button>
+    <button class="btn" onclick="exportAlerts('json')">Export JSON</button>
+    <button class="btn" onclick="exportAlerts('csv')">Export CSV</button>
+    <div id="status">
+      <div id="status-dot"></div>
+      <span id="status-text">connecting...</span>
+    </div>
+  </div>
+</header>
+
+<div class="stats">
+  <div class="stat" onclick="filterBySeverity('')">
+    <div class="stat-label">Total</div>
+    <div class="stat-value" id="c-total">0</div>
+  </div>
+  <div class="stat" onclick="filterBySeverity('critical')">
+    <div class="stat-label">Critical</div>
+    <div class="stat-value c-critical" id="c-critical">0</div>
+  </div>
+  <div class="stat" onclick="filterBySeverity('high')">
+    <div class="stat-label">High</div>
+    <div class="stat-value c-high" id="c-high">0</div>
+  </div>
+  <div class="stat" onclick="filterBySeverity('medium')">
+    <div class="stat-label">Medium</div>
+    <div class="stat-value c-medium" id="c-medium">0</div>
+  </div>
+  <div class="stat" onclick="filterByStatus('unassigned')">
+    <div class="stat-label">Unassigned</div>
+    <div class="stat-value c-purple" id="c-unassigned">0</div>
+  </div>
+  <div class="stat" onclick="filterByStatus('open')">
+    <div class="stat-label">Open</div>
+    <div class="stat-value c-green" id="c-open">0</div>
+  </div>
+  <div class="stat" onclick="openCorrelations()">
+    <div class="stat-label">Correlations</div>
+    <div class="stat-value c-purple" id="c-correlations">0</div>
+  </div>
+</div>
+
+<div class="toolbar">
+  <input type="text" id="search-input" placeholder="Search URL, host, summary..." oninput="applyFilters()">
+  <select id="filter-severity" onchange="applyFilters()">
+    <option value="">All severities</option>
+    <option value="critical">Critical</option>
+    <option value="high">High</option>
+    <option value="medium">Medium</option>
+    <option value="low">Low</option>
+  </select>
+  <select id="filter-status" onchange="applyFilters()">
+    <option value="">All statuses</option>
+    <option value="unassigned">Unassigned</option>
+    <option value="open">Open</option>
+    <option value="investigating">Investigating</option>
+    <option value="closed">Closed</option>
+  </select>
+  <select id="filter-action" onchange="applyFilters()">
+    <option value="">All actions</option>
+    <option value="block">Block</option>
+    <option value="investigate">Investigate</option>
+    <option value="monitor">Monitor</option>
+  </select>
+  <div class="sep"></div>
+  <div id="bulk-actions">
+    <span id="selected-count">0 selected</span>
+    <select id="bulk-status">
+      <option value="">Set status...</option>
+      <option value="open">Open</option>
+      <option value="investigating">Investigating</option>
+      <option value="closed">Closed</option>
+    </select>
+    <button class="btn" onclick="applyBulk()">Apply</button>
+    <button class="btn danger" onclick="clearSelection()">Clear</button>
+  </div>
+</div>
+
+<div class="main">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th><input type="checkbox" id="select-all" onchange="toggleSelectAll(this)"></th>
+          <th>Severity</th>
+          <th>Status</th>
+          <th>Host</th>
+          <th>URL</th>
+          <th>Flags</th>
+          <th>Claude Summary</th>
+          <th>Action</th>
+          <th>Assigned</th>
+          <th>Time</th>
+        </tr>
+      </thead>
+      <tbody id="alert-body"></tbody>
+    </table>
+    <div id="empty-state">No alerts yet. Traffic is being monitored.</div>
+  </div>
+
+  <div class="detail-panel" id="detail-panel">
+    <div class="detail-header">
+      <h2 id="detail-title">Alert #—</h2>
+      <button class="close-btn" onclick="closeDetail()">×</button>
+    </div>
+    <div class="detail-body" id="detail-body"></div>
+  </div>
+
+  <div class="detail-panel" id="corr-panel">
+    <div class="detail-header">
+      <h2>⚇ Correlations</h2>
+      <button class="close-btn" onclick="closeCorrelations()">×</button>
+    </div>
+    <div class="detail-body" id="corr-body"></div>
+  </div>
+</div>
+
+<script>
+// ── State ──
+let allAlerts = [];
+let filteredAlerts = [];
+let selectedIds = new Set();
+let activeAlertId = null;
+let correlations = [];
+const counts = { total: 0, critical: 0, high: 0, medium: 0, unassigned: 0, open: 0 };
+
+// ── Utils ──
+function fmt(iso) {
+  if (!iso) return '—';
+  return new Date(iso + (iso.endsWith('Z') ? '' : 'Z')).toLocaleTimeString();
+}
+function fmtFull(iso) {
+  if (!iso) return '—';
+  return new Date(iso + (iso.endsWith('Z') ? '' : 'Z')).toLocaleString();
+}
+function parseFlags(f) { try { return JSON.parse(f); } catch { return [f]; } }
+function sev(s) { return (s || 'unknown').toLowerCase(); }
+function cap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : '—'; }
+
+// ── Count updates ──
+function rebuildCounts() {
+  counts.total = allAlerts.length;
+  counts.critical = allAlerts.filter(a => sev(a.severity) === 'critical').length;
+  counts.high     = allAlerts.filter(a => sev(a.severity) === 'high').length;
+  counts.medium   = allAlerts.filter(a => sev(a.severity) === 'medium').length;
+  counts.unassigned = allAlerts.filter(a => a.status === 'unassigned').length;
+  counts.open       = allAlerts.filter(a => a.status === 'open').length;
+  document.getElementById('c-total').textContent     = counts.total;
+  document.getElementById('c-critical').textContent  = counts.critical;
+  document.getElementById('c-high').textContent      = counts.high;
+  document.getElementById('c-medium').textContent    = counts.medium;
+  document.getElementById('c-unassigned').textContent = counts.unassigned;
+  document.getElementById('c-open').textContent      = counts.open;
+}
+
+// ── Filter helpers from stats bar ──
+function filterBySeverity(sev) {
+  document.getElementById('filter-severity').value = sev;
+  applyFilters();
+}
+function filterByStatus(st) {
+  document.getElementById('filter-status').value = st;
+  applyFilters();
+}
+
+// ── Filters ──
+function applyFilters() {
+  const search   = document.getElementById('search-input').value.toLowerCase();
+  const severity = document.getElementById('filter-severity').value;
+  const status   = document.getElementById('filter-status').value;
+  const action   = document.getElementById('filter-action').value;
+
+  filteredAlerts = allAlerts.filter(a => {
+    if (severity && sev(a.severity) !== severity) return false;
+    if (status   && a.status !== status)          return false;
+    if (action   && a.recommended_action !== action) return false;
+    if (search) {
+      const haystack = `${a.url} ${a.host} ${a.summary} ${a.flags}`.toLowerCase();
+      if (!haystack.includes(search)) return false;
+    }
+    return true;
+  });
+  renderTable();
+}
+
+// ── Render ──
+function renderTable() {
+  const tbody = document.getElementById('alert-body');
+  tbody.innerHTML = '';
+  document.getElementById('empty-state').style.display = filteredAlerts.length ? 'none' : 'block';
+
+  filteredAlerts.forEach(a => {
+    const flags = parseFlags(a.flags || '[]');
+    const flagHtml = flags.map(f => `<span class="flag">${f}</span>`).join('');
+    const s = sev(a.severity);
+    const act = (a.recommended_action || 'investigate').toLowerCase();
+    const tr = document.createElement('tr');
+    if (selectedIds.has(a.id)) tr.classList.add('selected');
+    if (a.id === activeAlertId) tr.classList.add('active-detail');
+
+    tr.innerHTML = `
+      <td><input type="checkbox" ${selectedIds.has(a.id) ? 'checked' : ''} onchange="toggleSelect(${a.id}, this)" onclick="e=>e.stopPropagation()"></td>
+      <td><span class="sev ${s}">${s}</span></td>
+      <td><span class="status-badge ${a.status || 'unassigned'}">${cap(a.status || 'unassigned')}</span></td>
+      <td><div class="host-cell" title="${a.host}">${a.host || '—'}</div></td>
+      <td><div class="url-cell"  title="${a.url}">${a.url || '—'}</div></td>
+      <td><div class="flags-cell">${flagHtml}</div></td>
+      <td><div class="summary-cell" title="${a.summary || ''}">${a.summary || '—'}</div></td>
+      <td><span class="action-cell ${act}">${act}</span></td>
+      <td><span class="assigned-cell">${a.assigned_to || '—'}</span></td>
+      <td><span class="time-cell">${fmt(a.created_at)}</span></td>
+    `;
+    tr.addEventListener('click', (e) => {
+      if (e.target.type === 'checkbox') return;
+      openDetail(a.id);
+    });
+    tbody.appendChild(tr);
+  });
+}
+
+function prependRow(alert, isNew) {
+  allAlerts.unshift(alert);
+  rebuildCounts();
+  applyFilters();
+  if (isNew) {
+    const row = document.getElementById('alert-body').firstChild;
+    if (row) row.classList.add('new');
+  }
+}
+
+function updateAlertInList(updated) {
+  const idx = allAlerts.findIndex(a => a.id === updated.id);
+  if (idx !== -1) allAlerts[idx] = { ...allAlerts[idx], ...updated };
+  rebuildCounts();
+  applyFilters();
+  if (activeAlertId === updated.id) openDetail(updated.id);
+}
+
+// ── Selection ──
+function toggleSelect(id, cb) {
+  if (cb.checked) selectedIds.add(id);
+  else selectedIds.delete(id);
+  updateBulkBar();
+  renderTable();
+}
+function toggleSelectAll(cb) {
+  filteredAlerts.forEach(a => cb.checked ? selectedIds.add(a.id) : selectedIds.delete(a.id));
+  updateBulkBar();
+  renderTable();
+}
+function clearSelection() {
+  selectedIds.clear();
+  updateBulkBar();
+  renderTable();
+}
+function updateBulkBar() {
+  const bar = document.getElementById('bulk-actions');
+  document.getElementById('selected-count').textContent = `${selectedIds.size} selected`;
+  bar.classList.toggle('visible', selectedIds.size > 0);
+}
+async function applyBulk() {
+  const status = document.getElementById('bulk-status').value;
+  if (!status || selectedIds.size === 0) return;
+  await fetch('/alerts/bulk', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ ids: [...selectedIds], status })
+  });
+  selectedIds.forEach(id => {
+    const a = allAlerts.find(x => x.id === id);
+    if (a) a.status = status;
+  });
+  clearSelection();
+  rebuildCounts();
+  applyFilters();
+}
+
+// ── Detail panel ──
+async function openDetail(id) {
+  closeCorrelations();
+  activeAlertId = id;
+  const alert = await fetch(`/alerts/${id}`).then(r => r.json());
+  const panel = document.getElementById('detail-panel');
+  panel.classList.add('open');
+  document.getElementById('detail-title').textContent = `Alert #${id}`;
+  renderDetail(alert);
+  renderTable();
+}
+
+function closeDetail() {
+  document.getElementById('detail-panel').classList.remove('open');
+  activeAlertId = null;
+  renderTable();
+}
+
+function renderDetail(a) {
+  const flags = parseFlags(a.flags || '[]');
+  let raw = {};
+  try { raw = JSON.parse(a.raw || '{}'); } catch {}
+
+  const notesHtml = (a.notes || []).map(n => `
+    <div class="note">
+      <div class="note-meta">${fmtFull(n.created_at)} · ${n.author}</div>
+      <div class="note-body">${n.body}</div>
+    </div>
+  `).join('') || '<div style="color:var(--text3);font-size:12px">No notes yet.</div>';
+
+  document.getElementById('detail-body').innerHTML = `
+    <div class="detail-section">
+      <h3>Triage</h3>
+      <div class="detail-grid">
+        <div class="detail-field"><div class="detail-label">Severity</div>
+          <div><span class="sev ${sev(a.severity)}">${sev(a.severity)}</span></div></div>
+        <div class="detail-field"><div class="detail-label">Recommended Action</div>
+          <div class="detail-value action-cell ${a.recommended_action}">${a.recommended_action || '—'}</div></div>
+      </div>
+      <div class="detail-field full"><div class="detail-label">Claude Summary</div>
+        <div class="detail-value summary">${a.summary || '—'}</div></div>
+    </div>
+
+    <div class="detail-section">
+      <h3>Request</h3>
+      <div class="detail-grid">
+        <div class="detail-field"><div class="detail-label">Method</div><div class="detail-value">${a.method || '—'}</div></div>
+        <div class="detail-field"><div class="detail-label">Status</div><div class="detail-value">${cap(a.status || 'unassigned')}</div></div>
+        <div class="detail-field"><div class="detail-label">Assigned</div><div class="detail-value">${a.assigned_to || '—'}</div></div>
+        <div class="detail-field"><div class="detail-label">Time</div><div class="detail-value">${fmtFull(a.created_at)}</div></div>
+        <div class="detail-field full"><div class="detail-label">Host</div><div class="detail-value mono">${a.host || '—'}</div></div>
+        <div class="detail-field full"><div class="detail-label">URL</div><div class="detail-value mono">${a.url || '—'}</div></div>
+      </div>
+      <div class="detail-field"><div class="detail-label">Flags</div>
+        <div class="flags-cell" style="margin-top:4px; max-width:none">${flags.map(f=>`<span class="flag">${f}</span>`).join('')}</div></div>
+    </div>
+
+    ${raw.office_analysis ? `
+    <div class="detail-section">
+      <h3>Office Analysis</h3>
+      <div class="detail-field"><div class="detail-label">Has Macros</div><div class="detail-value">${raw.office_analysis.has_macros ? '⚠ Yes' : 'No'}</div></div>
+      ${raw.office_analysis.macro_content ? `<div class="detail-field"><div class="detail-label">Macro Content</div><div class="raw-block">${raw.office_analysis.macro_content}</div></div>` : ''}
+    </div>` : ''}
+
+    ${raw.pdf_analysis ? `
+    <div class="detail-section">
+      <h3>PDF Analysis</h3>
+      <div class="detail-field"><div class="detail-label">Has JavaScript</div><div class="detail-value">${raw.pdf_analysis.has_javascript ? '⚠ Yes' : 'No'}</div></div>
+      <div class="detail-field"><div class="detail-label">Has Embedded Files</div><div class="detail-value">${raw.pdf_analysis.has_embedded_files ? '⚠ Yes' : 'No'}</div></div>
+      ${raw.pdf_analysis.text_sample ? `<div class="detail-field"><div class="detail-label">Text Sample</div><div class="raw-block">${raw.pdf_analysis.text_sample.slice(0,500)}</div></div>` : ''}
+    </div>` : ''}
+
+    ${raw.js_analysis ? `
+    <div class="detail-section">
+      <h3>JavaScript Analysis</h3>
+      <div class="detail-field"><div class="detail-label">Obfuscation Patterns</div><div class="detail-value">${(raw.js_analysis.obfuscation_patterns||[]).join(', ') || 'None'}</div></div>
+      ${raw.js_analysis.sample ? `<div class="detail-field"><div class="detail-label">Sample</div><div class="raw-block">${raw.js_analysis.sample.slice(0,500)}</div></div>` : ''}
+    </div>` : ''}
+
+    <div class="detail-section">
+      <h3>Case Management</h3>
+      <div class="case-controls">
+        <div class="case-row">
+          <select id="d-status" onchange="toggleClosing()">
+            <option value="unassigned" ${a.status==='unassigned'?'selected':''}>Unassigned</option>
+            <option value="open"       ${a.status==='open'?'selected':''}>Open</option>
+            <option value="investigating" ${a.status==='investigating'?'selected':''}>Investigating</option>
+            <option value="closed"    ${a.status==='closed'?'selected':''}>Closed</option>
+          </select>
+          <input type="text" id="d-assigned" placeholder="Assign to..." value="${a.assigned_to || ''}">
+        </div>
+        <div class="closing-section ${a.status==='closed'?'visible':''}" id="closing-section">
+          <select id="d-closing">
+            <option value="" ${!a.closing_reason?'selected':''}>Closing reason...</option>
+            <option value="false_positive"   ${a.closing_reason==='false_positive'?'selected':''}>False Positive</option>
+            <option value="confirmed_threat" ${a.closing_reason==='confirmed_threat'?'selected':''}>Confirmed Threat</option>
+            <option value="mitigated"        ${a.closing_reason==='mitigated'?'selected':''}>Mitigated</option>
+            <option value="escalated"        ${a.closing_reason==='escalated'?'selected':''}>Escalated</option>
+          </select>
+        </div>
+        <button class="btn primary" onclick="saveCase(${a.id})">Save</button>
+      </div>
+    </div>
+
+    <div class="detail-section">
+      <h3>Notes</h3>
+      <div class="notes-list" id="notes-list">${notesHtml}</div>
+      <textarea class="note-input" id="note-input" placeholder="Add a note..."></textarea>
+      <button class="btn" style="margin-top:6px" onclick="addNote(${a.id})">Add Note</button>
+    </div>
+
+    <div class="detail-section">
+      <h3>Raw Headers</h3>
+      <div class="raw-block">${JSON.stringify(raw.request_headers || {}, null, 2)}</div>
+    </div>
+  `;
+}
+
+function toggleClosing() {
+  const status = document.getElementById('d-status').value;
+  document.getElementById('closing-section').classList.toggle('visible', status === 'closed');
+}
+
+async function saveCase(id) {
+  const status         = document.getElementById('d-status').value;
+  const assigned_to    = document.getElementById('d-assigned').value.trim() || null;
+  const closing_reason = document.getElementById('d-closing')?.value || null;
+  const res = await fetch(`/alerts/${id}`, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ status, assigned_to, closing_reason })
+  });
+  const updated = await res.json();
+  updateAlertInList(updated);
+}
+
+async function addNote(id) {
+  const input = document.getElementById('note-input');
+  const body = input.value.trim();
+  if (!body) return;
+  const res = await fetch(`/alerts/${id}`, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ note: body })
+  });
+  const updated = await res.json();
+  input.value = '';
+  renderDetail(updated);
+}
+
+// ── Correlations ──
+function updateCorrCount() {
+  const open = correlations.filter(c => c.status === 'open').length;
+  document.getElementById('corr-count-badge').textContent = open;
+  document.getElementById('c-correlations').textContent = open;
+}
+
+async function loadCorrelations() {
+  correlations = await fetch('/correlations').then(r => r.json());
+  updateCorrCount();
+  if (document.getElementById('corr-panel').classList.contains('open')) renderCorrelations();
+}
+
+function upsertCorrelation(c) {
+  const idx = correlations.findIndex(x => x.id === c.id);
+  if (idx !== -1) correlations[idx] = c; else correlations.unshift(c);
+  correlations.sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
+  updateCorrCount();
+  if (document.getElementById('corr-panel').classList.contains('open')) renderCorrelations();
+}
+
+function openCorrelations() {
+  closeDetail();
+  document.getElementById('corr-panel').classList.add('open');
+  renderCorrelations();
+}
+function closeCorrelations() {
+  document.getElementById('corr-panel').classList.remove('open');
+}
+
+function corrCard(c) {
+  const s = sev(c.severity);
+  let ids = [];
+  try { ids = JSON.parse(c.alert_ids); } catch {}
+  const chips = ids.map(id => `<span class="corr-chip" onclick="openDetail(${id})">#${id}</span>`).join('');
+  const ack = (c.status !== 'acknowledged' && c.status !== 'closed')
+    ? `<button class="btn" onclick="setCorrStatus(${c.id},'acknowledged')">Acknowledge</button>` : '';
+  const close = (c.status !== 'closed')
+    ? `<button class="btn danger" onclick="setCorrStatus(${c.id},'closed')">Close</button>`
+    : `<button class="btn" onclick="setCorrStatus(${c.id},'open')">Reopen</button>`;
+  return `
+    <div class="corr-card ${s} ${c.status}">
+      <div class="corr-card-head">
+        <span class="sev ${s}">${s}</span>
+        <span class="corr-rule">${c.rule}</span>
+        <span class="status-badge ${c.status === 'open' ? 'open' : 'closed'}">${cap(c.status)}</span>
+      </div>
+      <div class="corr-title">${c.title}</div>
+      <div class="corr-desc">${c.description}</div>
+      <div class="corr-meta">
+        <span>${c.alert_count} contributing alerts</span>
+        <span>updated ${fmt(c.updated_at)}</span>
+      </div>
+      <div class="corr-alert-chips">${chips}</div>
+      <div class="corr-actions">${ack}${close}</div>
+    </div>`;
+}
+
+function renderCorrelations() {
+  const body = document.getElementById('corr-body');
+  const open = correlations.filter(c => c.status !== 'closed');
+  const closed = correlations.filter(c => c.status === 'closed');
+  const ordered = [...open, ...closed];
+  body.innerHTML = ordered.length
+    ? `<div class="corr-list">${ordered.map(corrCard).join('')}</div>`
+    : '<div class="corr-empty">No correlations detected yet.<br>Patterns across multiple alerts from one host will appear here.</div>';
+}
+
+async function setCorrStatus(id, status) {
+  const res = await fetch(`/correlations/${id}`, {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ status })
+  });
+  upsertCorrelation(await res.json());
+}
+
+// ── Export ──
+function exportAlerts(format) {
+  window.open(`/export?format=${format}`, '_blank');
+}
+
+// ── Keyboard shortcuts ──
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+  if (e.key === 'Escape') { closeDetail(); closeCorrelations(); }
+  if (e.key === '/' ) { e.preventDefault(); document.getElementById('search-input').focus(); }
+});
+
+// ── Load ──
+fetch('/alerts')
+  .then(r => r.json())
+  .then(alerts => {
+    allAlerts = alerts;
+    rebuildCounts();
+    applyFilters();
+  });
+loadCorrelations();
+
+// ── WebSocket ──
+function connectWS() {
+  const dot  = document.getElementById('status-dot');
+  const text = document.getElementById('status-text');
+  const ws   = new WebSocket(`ws://${location.host}/ws`);
+
+  ws.onopen = () => { dot.classList.remove('disconnected'); text.textContent = 'live'; };
+
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.event === 'new_alert') {
+      prependRow(msg.data, true);
+      if (Notification.permission === 'granted' && sev(msg.data.severity) === 'critical') {
+        new Notification('ProxyWatcher — Critical Alert', { body: msg.data.summary });
+      }
+    } else if (msg.event === 'alert_updated') {
+      updateAlertInList(msg.data);
+    } else if (msg.event === 'bulk_updated') {
+      msg.data.ids.forEach(id => {
+        const a = allAlerts.find(x => x.id === id);
+        if (a && msg.data.status) a.status = msg.data.status;
+      });
+      rebuildCounts();
+      applyFilters();
+    } else if (msg.event === 'correlation_new') {
+      upsertCorrelation(msg.data);
+      if (Notification.permission === 'granted') {
+        new Notification('ProxyWatcher — Correlation detected', { body: msg.data.title });
+      }
+    } else if (msg.event === 'correlation_updated') {
+      upsertCorrelation(msg.data);
+    }
+  };
+
+  ws.onclose = () => {
+    dot.classList.add('disconnected');
+    text.textContent = 'reconnecting...';
+    setTimeout(connectWS, 3000);
+  };
+}
+
+// Request notification permission for critical alerts
+if (Notification.permission === 'default') Notification.requestPermission();
+
+connectWS();
+</script>
+</body>
+</html>

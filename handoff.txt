@@ -1,0 +1,82 @@
+You are working on ProxyWatcher, an AI-powered network threat detection tool running on an Ubuntu 22.04 gateway VM in a Proxmox malware analysis lab.
+
+LAB ARCHITECTURE
+- kali (192.168.0.165) — analyst machine
+- gateway (192.168.0.76) — this machine, runs all ProxyWatcher services
+- sandbox (10.10.10.2) — isolated VM where malware runs, no real internet, all traffic routes through gateway
+
+PROJECT LOCATION: ~/proxywatcher/
+
+PROJECT STRUCTURE
+proxywatcher/
+├── addon/interceptor.py     # mitmproxy addon — traffic interception, YARA, macro/PDF/JS analysis
+├── backend/main.py          # FastAPI backend — SQLite storage, Claude triage, WebSocket
+├── frontend/index.html      # Dashboard UI — live alerts, case management, filters
+├── dns_monitor.py           # Standalone DNS monitor on UDP 5353
+├── enrichment.py            # VirusTotal + AbuseIPDB IOC enrichment
+├── yara-rules/signature-base/  # Neo23x0 community YARA rules
+├── test-files/              # Test malware samples
+├── run.sh                   # Starts all three services via tmux
+└── proxywatcher.db          # SQLite database
+
+HOW TO START EVERYTHING
+cd ~/proxywatcher
+source .venv/bin/activate
+./run.sh
+
+SERVICES
+- FastAPI/uvicorn on port 8000 (dashboard + REST API + WebSocket)
+- mitmproxy (mitmdump) on port 8080 — HTTP/S interception
+- dns_monitor.py on UDP 5353 — DNS query analysis
+
+PYTHON ENVIRONMENTS
+- ~/.venv — FastAPI, uvicorn, aiosqlite, httpx (Python 3.12)
+- /usr/bin/python3.10 — mitmproxy, oletools, pdfminer, yara-python, dnslib (system Python used by mitmdump and dns_monitor)
+- ~/.local/bin/mitmdump — mitmproxy 11.0.2
+
+KEY ENV VARS (set in ~/.bashrc)
+- ANTHROPIC_API_KEY
+- VIRUSTOTAL_API_KEY
+- ABUSEIPDB_API_KEY
+
+WHAT IS ALREADY BUILT AND WORKING
+- mitmproxy intercepts all HTTP/S from sandbox, extracts features, posts to FastAPI
+- Office macro extraction via oletools
+- PDF analysis via pdfminer
+- JavaScript obfuscation detection
+- YARA scanning (279 rules from Neo23x0 signature-base)
+- DNS monitoring — flags DGA domains, high entropy, excessive subdomains, suspicious TLDs
+- IOC enrichment — VirusTotal hash/domain lookup, AbuseIPDB IP reputation
+- Claude API triage — severity score, plain-English summary, recommended action
+- FastAPI backend with SQLite, WebSocket live push, REST API
+- Dashboard with live alerts, case management (status/assign/notes/close), bulk actions, filters, search, export
+
+WHAT TO BUILD NEXT (in priority order)
+1. Correlation rules — detect patterns across multiple alerts e.g. same host triggering 5 alerts in 10 minutes, or repeated connections at regular intervals (beaconing detection)
+2. Alert timeline per host — chronological view of all activity from a single host
+3. Beaconing detection — identify C2 by analyzing timing regularity of repeated connections
+4. GeoIP — MaxMind GeoLite2 integration, flag unusual countries
+5. Alert suppression/tuning — whitelist known-good hosts/rules to reduce noise
+6. Automated response — on critical alert, auto-add iptables DROP rule
+
+KNOWN ISSUES / GOTCHAS
+- YARA loading takes ~30 seconds on startup, do not kill the process during this time
+- dns_monitor.py must run as sudo (binds to port 5353 via iptables redirect from 53)
+- The venv Python (3.12) cannot import mitmproxy — only use /usr/bin/python3.10 for mitmproxy-related code
+- Dashboard is accessed from kali via SSH tunnel: ssh -L 8001:localhost:8000 gateway
+- changelogs.ubuntu.com generates constant DNS noise — good first candidate for suppression whitelist
+
+CODING CONVENTIONS
+- Backend is async FastAPI, use aiosqlite for all DB access
+- WebSocket broadcasts use {"event": "event_name", "data": {...}} format
+- New alert fields go in the raw JSON column, not new DB columns, unless they need to be queried
+- Frontend is vanilla JS, no build step, served as static file by FastAPI
+- All new features should degrade gracefully if an API key is missing
+
+NETWORK CONFIG
+- vmbr0: gateway real network interface (ens18), IP 192.168.0.76, has real internet
+- vmbr1: isolated lab bridge (ens19), IP 10.10.10.1, connects to sandbox only
+- iptables redirects sandbox port 80/443 to gateway port 8080 (mitmproxy)
+- iptables redirects sandbox port 53 to gateway port 5353 (dns_monitor)
+- INetSim runs on gateway, simulates DNS/HTTP/SMTP for the sandbox
+- Sandbox default gateway is 10.10.10.1, DNS is 10.10.10.1
